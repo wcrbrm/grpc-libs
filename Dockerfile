@@ -1,46 +1,52 @@
-# Copyright 2017-2021 Digital Asset Exchange Limited. All rights reserved.
-# Use of this source code is governed by Microsoft Reference Source
-# License (MS-RSL) that can be found in the LICENSE file.
+ARG GO_VERSION=1.16
+FROM golang:${GO_VERSION} as deps
 
-FROM golang:1.16 as deps
-
-ENV PROTOC_VERSION=3.15.4
-ENV PROTOC_ZIP=protoc-${PROTOC_VERSION}-linux-x86_64.zip
-ENV PROTOC_PLUGINS=grpc
 ENV GOBIN=/usr/local/bin
 
 RUN apt-get update && apt-get install -yf --no-install-recommends \
     unzip
 
-# Install protoc
-RUN curl -OLqs https://github.com/google/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP} && \
-    unzip -o ${PROTOC_ZIP} -d /usr/local bin/protoc && \
-    unzip -o ${PROTOC_ZIP} -d /usr/local include/* && \
-    rm -f ${PROTOC_ZIP}
+# protoc
+RUN VER=`curl -sI https://github.com/protocolbuffers/protobuf/releases/latest | \
+    grep -i '^location: ' | sed -E 's/^.*v([0-9.]+)\r$/\1/'` && \
+    echo "INFO: protoc [$VER] version" && \
+    ZIP=protoc-${VER}-linux-x86_64.zip && \
+    curl -OLqs https://github.com/google/protobuf/releases/download/v${VER}/${ZIP} && \
+    unzip -o ${ZIP} -d /usr/local bin/protoc && \
+    unzip -o ${ZIP} -d /usr/local include/* && \
+    rm -f ${ZIP}
+
+# protoc-gen-grpc-gateway, protoc-gen-openapiv2
+RUN VER=`curl -sI https://github.com/grpc-ecosystem/grpc-gateway/releases/latest | \
+    grep -i '^location: ' | sed -E 's/^.*v([0-9.]+)\r$/\1/'` && \
+    echo "INFO: grpc-gateway [$VER] version" && \
+    mkdir -p /go/src/github.com/grpc-ecosystem/grpc-gateway && \
+    curl -sL https://github.com/grpc-ecosystem/grpc-gateway/archive/refs/tags/v${VER}.tar.gz | tar -zxC /go/src/github.com/grpc-ecosystem/grpc-gateway --strip-components=1 && \
+    curl -sL https://github.com/grpc-ecosystem/grpc-gateway/releases/download/v${VER}/protoc-gen-grpc-gateway-v${VER}-linux-x86_64 -o /usr/local/bin/protoc-gen-grpc-gateway && \
+    curl -sL https://github.com/grpc-ecosystem/grpc-gateway/releases/download/v${VER}/protoc-gen-openapiv2-v${VER}-linux-x86_64 -o /usr/local/bin/protoc-gen-openapiv2 && \
+    chmod 0755 /usr/local/bin/protoc-gen-grpc-gateway && \
+    chmod 0755 /usr/local/bin/protoc-gen-openapiv2
+
+RUN go get -u google.golang.org/protobuf/cmd/protoc-gen-go
+RUN go get -u google.golang.org/grpc/cmd/protoc-gen-go-grpc
+RUN go get -u github.com/amsokol/protoc-gen-gotag
 
 WORKDIR /deps
 
-RUN GO111MODULE=auto go get -u github.com/golang/protobuf/protoc-gen-go
-RUN GO111MODULE=auto go get -u github.com/grpc-ecosystem/grpc-gateway/protoc-gen-grpc-gateway
-RUN GO111MODULE=auto go get -u github.com/grpc-ecosystem/grpc-gateway/protoc-gen-openapiv2
-RUN GO111MODULE=auto go get -u google.golang.org/grpc
-RUN GO111MODULE=auto go get -u github.com/novalagung/gorep
-RUN GO111MODULE=auto go get -u github.com/amsokol/protoc-gen-gotag
-
 RUN mkdir -p /proto/ && \
     cd /usr/local/include && \
-    find . -name "*.proto" -type f -exec cp --parents '{}' /proto/ \; && \
-    find /proto/ -type f | grep \.proto$
+    find . -name "*.proto" -type f -exec cp --parents '{}' /proto/ \;
 
-RUN cd /go && \
-    git clone --depth=1 https://github.com/googleapis/googleapis && \
-    cd /go/googleapis/ && \
+RUN REPO=github.com/googleapis/googleapis && \
+    git clone --depth=1 https://${REPO} /go/src/${REPO} && \
+    cd /go/src/${REPO} && \
     find google/api -name "*.proto" -type f -exec cp --parents '{}' /proto/ \; && \
-    rm -fR /go/googleapis
+    rm -fR /go/src/${REPO}
 
-RUN cd /go/src/github.com/grpc-ecosystem/grpc-gateway/ && \
+RUN REPO=github.com/grpc-ecosystem/grpc-gateway && \
+    cd /go/src/${REPO} && \
     find ./protoc-gen-openapiv2/ -name "*.proto" -type f -exec cp --parents '{}' /proto/ \; && \
-    find /proto/ -type f | grep \.proto$
+    rm -fR /go/src/${REPO}
 
 RUN mkdir -p /chroot && \
     find /proto > chroot.list && \
